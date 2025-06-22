@@ -167,6 +167,8 @@ struct Config {
     tcp_keepalive: Option<Duration>,
     tcp_keepalive_interval: Option<Duration>,
     tcp_keepalive_retries: Option<u32>,
+    #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
+    tcp_user_timeout: Option<Duration>,
     #[cfg(any(feature = "native-tls", feature = "__rustls"))]
     identity: Option<Identity>,
     proxies: Vec<ProxyMatcher>,
@@ -292,6 +294,8 @@ impl ClientBuilder {
                 tcp_keepalive: None, //Some(Duration::from_secs(60)),
                 tcp_keepalive_interval: None,
                 tcp_keepalive_retries: None,
+                #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
+                tcp_user_timeout: None,
                 proxies: Vec::new(),
                 auto_sys_proxy: true,
                 redirect_policy: redirect::Policy::default(),
@@ -905,6 +909,8 @@ impl ClientBuilder {
         connector_builder.set_keepalive(config.tcp_keepalive);
         connector_builder.set_keepalive_interval(config.tcp_keepalive_interval);
         connector_builder.set_keepalive_retries(config.tcp_keepalive_retries);
+        #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
+        connector_builder.set_tcp_user_timeout(config.tcp_user_timeout);
 
         #[cfg(feature = "socks")]
         connector_builder.set_socks_resolver(resolver);
@@ -1704,6 +1710,21 @@ impl ClientBuilder {
     #[cfg_attr(docsrs, doc(cfg(feature = "rustls-tls")))]
     pub fn with_server_name_resolver(mut self, server_name_resolver: Arc<dyn hyper_rustls::ResolveServerName + Send + Sync>) -> ClientBuilder {
         self.config.server_name_resolver = server_name_resolver;
+        self
+    }
+
+    /// Set that all sockets have `TCP_USER_TIMEOUT` set with the supplied duration.
+    ///
+    /// This option controls how long transmitted data may remain unacknowledged before
+    /// the connection is force-closed.
+    ///
+    /// The current default is `None` (option disabled).
+    #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
+    pub fn tcp_user_timeout<D>(mut self, val: D) -> ClientBuilder
+    where
+        D: Into<Option<Duration>>,
+    {
+        self.config.tcp_user_timeout = val.into();
         self
     }
 
@@ -2517,7 +2538,7 @@ impl Client {
             .map(Box::pin);
 
         Pending {
-            inner: PendingInner::Request(PendingRequest {
+            inner: PendingInner::Request(Box::pin(PendingRequest {
                 method,
                 url,
                 headers,
@@ -2531,7 +2552,7 @@ impl Client {
                 total_timeout,
                 read_timeout_fut,
                 read_timeout: self.inner.read_timeout,
-            }),
+            })),
         }
     }
 
@@ -2554,9 +2575,8 @@ impl Client {
         for proxy in self.inner.proxies.iter() {
             if let Some(header) = proxy.http_non_tunnel_basic_auth(dst) {
                 headers.insert(PROXY_AUTHORIZATION, header);
+                break;
             }
-
-            break;
         }
     }
 
@@ -2574,9 +2594,8 @@ impl Client {
                 iter.iter().for_each(|(key, value)| {
                     headers.insert(key, value.clone());
                 });
+                break;
             }
-
-            break;
         }
     }
 }
@@ -2816,7 +2835,7 @@ pin_project! {
 }
 
 enum PendingInner {
-    Request(PendingRequest),
+    Request(Pin<Box<PendingRequest>>),
     Error(Option<crate::Error>),
 }
 
@@ -3017,7 +3036,7 @@ impl Future for PendingRequest {
                             }
                         }
 
-                        return Poll::Ready(Err(e));
+                        return Poll::Ready(Err(e.if_no_url(|| self.url.clone())));
                     }
                     Poll::Ready(Ok(res)) => res.map(super::body::boxed),
                     Poll::Pending => return Poll::Pending,
@@ -3109,5 +3128,11 @@ mod tests {
         let err = result.err().unwrap();
         assert!(err.is_builder());
         assert_eq!(url_str, err.url().unwrap().as_str());
+    }
+
+    #[test]
+    fn test_future_size() {
+        let s = std::mem::size_of::<super::Pending>();
+        assert!(s < 128, "size_of::<Pending>() == {s}, too big");
     }
 }
