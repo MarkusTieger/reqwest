@@ -1,3 +1,25 @@
+## v0.12.23
+
+- Add `ClientBuilder::unix_socket(path)` option that will force all requests over that Unix Domain Socket.
+- Add `ClientBuilder::retry(policy)` and `reqwest::retry::Builder` to configure automatic retries.
+- Add `ClientBuilder::dns_resolver2()` with more ergonomic argument bounds, allowing more resolver implementations.
+- Add `http3_*` options to `blocking::ClientBuilder`.
+- Fix default TCP timeout values to enabled and faster.
+- Fix SOCKS proxies to default to port 1080
+- (wasm) Add cache methods to `RequestBuilder`.
+
+## v0.12.22
+
+- Fix socks proxies when resolving IPv6 destinations.
+
+## v0.12.21
+
+- Fix socks proxy to use `socks4a://` instead of `socks4h://`.
+- Fix `Error::is_timeout()` to check for hyper and IO timeouts too.
+- Fix request `Error` to again include URLs when possible.
+- Fix socks connect error to include more context.
+- (wasm) implement `Default` for `Body`.
+
 ## v0.12.20
 
 - Add `ClientBuilder::tcp_user_timeout(Duration)` option to set `TCP_USER_TIMEOUT`.
